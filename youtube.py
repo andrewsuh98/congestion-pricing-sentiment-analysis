@@ -183,17 +183,27 @@ def get_video_comments(youtube, video_id):
         return []
 
 
-def load_comments(csv_file="comments.csv"):
+def load_comments(csv_file=None):
     """
     Load comments from CSV into a pandas DataFrame.
 
     Args:
-            csv_file: Path to the CSV file (default: comments.csv)
+            csv_file: Path to the CSV file (default: latest file in data/)
 
     Returns:
             pandas DataFrame with parsed dates and types
     """
     try:
+        # If no file specified, find the latest CSV in data/
+        if csv_file is None:
+            import glob
+            csv_files = glob.glob("data/youtube_comments_*.csv")
+            if not csv_files:
+                print("Error: No CSV files found in data/ directory")
+                return None
+            csv_file = max(csv_files, key=os.path.getmtime)
+            print(f"Loading latest file: {csv_file}")
+
         df = pd.read_csv(csv_file)
 
         # Convert date columns to datetime
@@ -225,18 +235,26 @@ def load_comments(csv_file="comments.csv"):
         return None
 
 
-def scrape_comments(query, max_videos=10, output_file="comments.csv"):
+def scrape_comments(query, max_videos=10, output_file=None):
     """
     Main orchestrator function to search videos and scrape comments.
 
     Args:
             query: Search query string
             max_videos: Maximum number of videos to process
-            output_file: Output CSV filename
+            output_file: Output CSV filename (default: data/youtube_comments_YYYYMMDD_HHMM.csv)
     """
     if not API_KEY or API_KEY == "your_api_key_here":
         print("Error: Please set your YouTube API key in the .env file")
         return
+
+    # Create data directory if it doesn't exist
+    os.makedirs("data", exist_ok=True)
+
+    # Generate default filename with timestamp if not provided
+    if output_file is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        output_file = f"data/youtube_comments_{timestamp}.csv"
 
     # Build YouTube API service
     youtube = build("youtube", "v3", developerKey=API_KEY)
@@ -251,7 +269,8 @@ def scrape_comments(query, max_videos=10, output_file="comments.csv"):
     print(f"Found {len(videos)} videos. Fetching comments...")
 
     all_comments = []
-    for video in videos:
+    for i, video in enumerate(videos, 1):
+        print(f"[{i}/{len(videos)}] Processing: {video['title']}")
         comments = get_video_comments(youtube, video["video_id"])
 
         # Add video metadata to each comment
@@ -267,7 +286,7 @@ def scrape_comments(query, max_videos=10, output_file="comments.csv"):
             comment["video_description"] = video.get("description", "")
 
         all_comments.extend(comments)
-        print(f"Collected {len(comments)} comments")
+        print(f"  → Collected {len(comments)} comments")
 
     # Export to CSV
     if all_comments:
@@ -322,8 +341,8 @@ def main():
         "-o",
         "--output",
         type=str,
-        default="comments.csv",
-        help="Output CSV filename (default: comments.csv)",
+        default=None,
+        help="Output CSV filename (default: data/youtube_comments_YYYYMMDD_HHMM.csv)",
     )
     parser.add_argument(
         "-a",
