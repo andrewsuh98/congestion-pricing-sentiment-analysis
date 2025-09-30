@@ -7,6 +7,7 @@ Scrapes comments from YouTube videos using the YouTube Data API v3
 import os
 import csv
 import argparse
+import re
 from datetime import datetime
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
@@ -16,6 +17,74 @@ import pandas as pd
 # Load environment variables
 load_dotenv()
 API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+
+def parse_duration(duration):
+    """
+    Convert ISO 8601 duration (e.g., PT2M18S) to seconds.
+
+    Args:
+            duration: ISO 8601 duration string
+
+    Returns:
+            Total duration in seconds as integer
+    """
+    if not duration:
+        return 0
+
+    # Pattern matches PT1H30M5S format
+    pattern = r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?"
+    match = re.match(pattern, duration)
+
+    if not match:
+        return 0
+
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = int(match.group(3) or 0)
+
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def get_video_details(youtube, video_ids):
+    """
+    Fetch detailed metadata for a list of video IDs.
+
+    Args:
+            youtube: YouTube API service object
+            video_ids: List of video IDs
+
+    Returns:
+            Dictionary mapping video_id to metadata dict
+    """
+    if not video_ids:
+        return {}
+
+    try:
+        request = youtube.videos().list(
+            part="snippet,statistics,contentDetails", id=",".join(video_ids)
+        )
+        response = request.execute()
+
+        video_details = {}
+        for item in response.get("items", []):
+            video_id = item["id"]
+            stats = item.get("statistics", {})
+            content = item.get("contentDetails", {})
+
+            video_details[video_id] = {
+                "view_count": int(stats.get("viewCount", 0)),
+                "like_count": int(stats.get("likeCount", 0)),
+                "comment_count": int(stats.get("commentCount", 0)),
+                "duration": parse_duration(content.get("duration", "")),
+                "description": item["snippet"].get("description", ""),
+            }
+
+        return video_details
+
+    except HttpError as e:
+        print(f"An HTTP error occurred fetching video details: {e}")
+        return {}
 
 
 def search_videos(youtube, query, max_results=10):
@@ -41,14 +110,25 @@ def search_videos(youtube, query, max_results=10):
         response = request.execute()
 
         videos = []
-        for item in response.get("items", []):
+        video_ids = []
+        for rank, item in enumerate(response.get("items", []), start=1):
+            video_id = item["id"]["videoId"]
+            video_ids.append(video_id)
             video = {
-                "video_id": item["id"]["videoId"],
+                "video_id": video_id,
+                "relevance_rank": rank,
                 "title": item["snippet"]["title"],
                 "channel": item["snippet"]["channelTitle"],
-                "published_at": item["snippet"]["publishedAt"],
+                "video_published_at": item["snippet"]["publishedAt"],
             }
             videos.append(video)
+
+        # Enrich with detailed metadata
+        details = get_video_details(youtube, video_ids)
+        for video in videos:
+            vid_id = video["video_id"]
+            if vid_id in details:
+                video.update(details[vid_id])
 
         return videos
 
@@ -85,8 +165,8 @@ def get_video_comments(youtube, video_id):
                         "video_id": video_id,
                         "author": comment["authorDisplayName"],
                         "comment_text": comment["textDisplay"],
-                        "like_count": comment["likeCount"],
-                        "published_at": comment["publishedAt"],
+                        "comment_like_count": comment["likeCount"],
+                        "comment_published_at": comment["publishedAt"],
                     }
                 )
 
@@ -116,11 +196,24 @@ def load_comments(csv_file="comments.csv"):
     try:
         df = pd.read_csv(csv_file)
 
-        # Convert published_at to datetime
-        df["published_at"] = pd.to_datetime(df["published_at"])
+        # Convert date columns to datetime
+        if "video_published_at" in df.columns:
+            df["video_published_at"] = pd.to_datetime(df["video_published_at"])
+        if "comment_published_at" in df.columns:
+            df["comment_published_at"] = pd.to_datetime(df["comment_published_at"])
 
-        # Ensure like_count is integer
-        df["like_count"] = df["like_count"].astype(int)
+        # Convert numeric columns to integers
+        numeric_cols = [
+            "relevance_rank",
+            "video_view_count",
+            "video_like_count",
+            "video_comment_count",
+            "video_duration",
+            "comment_like_count",
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(int)
 
         return df
 
@@ -158,14 +251,20 @@ def scrape_comments(query, max_videos=10, output_file="comments.csv"):
     print(f"Found {len(videos)} videos. Fetching comments...")
 
     all_comments = []
-    for i, video in enumerate(videos, 1):
-        print(f"[{i}/{len(videos)}] Processing: {video['title']}")
+    for video in videos:
         comments = get_video_comments(youtube, video["video_id"])
 
         # Add video metadata to each comment
         for comment in comments:
+            comment["relevance_rank"] = video.get("relevance_rank", 0)
             comment["video_title"] = video["title"]
             comment["video_channel"] = video["channel"]
+            comment["video_published_at"] = video.get("video_published_at", "")
+            comment["video_view_count"] = video.get("view_count", 0)
+            comment["video_like_count"] = video.get("like_count", 0)
+            comment["video_comment_count"] = video.get("comment_count", 0)
+            comment["video_duration"] = video.get("duration", "")
+            comment["video_description"] = video.get("description", "")
 
         all_comments.extend(comments)
         print(f"Collected {len(comments)} comments")
@@ -175,12 +274,19 @@ def scrape_comments(query, max_videos=10, output_file="comments.csv"):
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             fieldnames = [
                 "video_id",
+                "relevance_rank",
                 "video_title",
                 "video_channel",
+                "video_published_at",
+                "video_view_count",
+                "video_like_count",
+                "video_comment_count",
+                "video_duration",
+                "video_description",
                 "author",
                 "comment_text",
-                "like_count",
-                "published_at",
+                "comment_like_count",
+                "comment_published_at",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
