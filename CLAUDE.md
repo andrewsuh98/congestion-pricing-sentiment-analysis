@@ -4,13 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-YouTube comment scraper for research on "NYC congestion pricing". Fetches videos via YouTube Data API v3, collects all top-level comments with pagination, and exports to timestamped CSV files with rich video metadata.
+Research pipeline for analyzing YouTube discourse on NYC congestion pricing:
+
+1. **Data Collection**: Fetch videos and comments via YouTube Data API v3
+2. **Transcript Extraction**: Download video transcripts using youtube-transcript-api
+3. **Video Summarization**: Generate structured summaries using OpenAI with stance classification
+4. **Comment Labeling**: Classify comments by sentiment and stance using OpenAI structured outputs
 
 ## Setup
 
 1. Install dependencies: `pip install -r requirements.txt`
-2. Create `.env` file with `YOUTUBE_API_KEY=your_key_here`
-3. Get API key from: https://console.cloud.google.com/apis/credentials
+2. Create `.env` file with API keys:
+   ```
+   YOUTUBE_API_KEY=your_youtube_key_here
+   OPENAI_API_KEY=your_openai_key_here
+   ```
+3. Get YouTube API key: https://console.cloud.google.com/apis/credentials
+4. Get OpenAI API key: https://platform.openai.com/api-keys
 
 ## Usage
 
@@ -35,31 +45,68 @@ df = load_comments()                        # Auto-loads latest CSV from data/
 df = load_comments('path/to/file.csv')      # Load specific file
 ```
 
+**Transcript extraction:**
+```bash
+python fetch_transcripts.py                 # Fetch all video transcripts
+python fetch_transcripts.py -n 5            # Fetch first 5 videos only
+python fetch_transcripts.py -i data/transcripts_20251008_1430.csv
+```
+
+**Video summarization (requires OpenAI API):**
+```bash
+python summarize_videos.py                  # Summarize all videos
+python summarize_videos.py -i data/transcripts_20251008_1430.csv
+```
+
+**Comment labeling (requires OpenAI API):**
+```bash
+python label_comments.py -n 10              # Test with 10 comments
+python label_comments.py -n 100             # Test with 100 comments
+python label_comments.py                    # Label all comments
+python label_comments.py -o output.csv      # Resume capability (reuse same filename)
+```
+
 ## Architecture
 
-**Single-file architecture** (`youtube.py`) with functional pipeline:
+**Four-stage pipeline:**
 
-1. **Search phase:** `search_videos()` → `get_video_details()`
-   - Searches by query, returns video IDs ranked by YouTube's relevance
-   - Enriches with statistics (views, likes, duration, description)
-   - Duration converted from ISO 8601 to seconds via `parse_duration()`
+### 1. Data Collection (`youtube.py`)
+- **Search phase:** `search_videos()` → `get_video_details()`
+  - Searches by query, returns video IDs ranked by YouTube's relevance
+  - Enriches with statistics (views, likes, duration, description)
+  - Duration converted from ISO 8601 to seconds via `parse_duration()`
+- **Collection phase:** `get_video_comments()` per video
+  - Fetches all top-level comments with pagination (100/request)
+  - Handles disabled comments gracefully
+  - Does NOT fetch replies (would require separate API calls)
+- **Export:** Saves to `data/youtube_comments_YYYYMMDD_HHMM.csv`
 
-2. **Collection phase:** `get_video_comments()` per video
-   - Fetches all top-level comments with pagination (100/request)
-   - Handles disabled comments gracefully
-   - Does NOT fetch replies (would require separate API calls)
+### 2. Transcript Extraction (`fetch_transcripts.py`)
+- Uses `youtube-transcript-api` (no OAuth required)
+- Fetches transcripts for all videos in comments CSV
+- Cleans escaped characters (`\xa0`, `\n`) and normalizes whitespace
+- Outputs: `data/transcripts_YYYYMMDD_HHMM.csv`
+- Fields: `video_id`, `is_generated`, `language`, `language_code`, `transcript`
 
-3. **Export phase:** `scrape_comments()` orchestrates everything
-   - Merges video metadata with each comment
-   - Saves to `data/youtube_comments_YYYYMMDD_HHMM.csv`
-   - Creates `data/` directory automatically
+### 3. Video Summarization (`summarize_videos.py`)
+- Uses OpenAI structured outputs (gpt-4o-mini)
+- Pydantic model: `VideoSummary` with 5 structured fields
+- Loads video metadata from comments CSV + transcripts
+- Outputs: `data/video_summaries_YYYYMMDD_HHMM.csv`
+- Fields: `video_id`, `summary_text`, `stance_congestion_pricing`, `stance_confidence`, `key_arguments` (JSON), `tone`
 
-4. **Analysis utilities:**
-   - `load_comments()`: Loads CSV with proper type conversions (datetimes, integers)
-   - `--analyze` flag: Shows quick stats (comment count, top authors, most liked)
+### 4. Comment Labeling (`label_comments.py`)
+- Uses OpenAI structured outputs (gpt-4o-mini)
+- Pydantic model: `CommentSentiment` with 4 structured fields
+- Passes full video context (title, channel, date, stance, summary) to LLM
+- Rate limiting: 50 requests/minute (~1.2s delay)
+- Checkpointing: saves every 100 comments, resume with same filename
+- Outputs: `data/labeled_comments_YYYYMMDD_HHMM.csv`
+- New fields: `sentiment`, `stance_congestion_pricing_comment`, `stance_confidence_comment`, `tone`
 
-## CSV Schema
+## CSV Schemas
 
+### Comments CSV (`youtube_comments_*.csv`)
 **Video metadata (repeated per comment):**
 - `video_id`, `relevance_rank`, `video_title`, `video_channel`
 - `video_published_at`, `video_view_count`, `video_like_count`, `video_comment_count`
@@ -70,13 +117,48 @@ df = load_comments('path/to/file.csv')      # Load specific file
 
 Note: Two separate date columns distinguish when video was uploaded vs when comment was posted.
 
+### Transcripts CSV (`transcripts_*.csv`)
+- `video_id`: YouTube video ID
+- `is_generated`: Boolean, true if auto-generated captions
+- `language`: Full language name
+- `language_code`: ISO language code
+- `transcript`: Full cleaned transcript text (one entry per video)
+
+### Video Summaries CSV (`video_summaries_*.csv`)
+- `video_id`: YouTube video ID
+- `summary_text`: 150-300 word summary
+- `stance_congestion_pricing`: strongly_supportive | supportive | neutral_or_mixed | skeptical | strongly_oppose | unclear
+- `stance_confidence`: Float 0-1
+- `key_arguments`: JSON array of 3-10 key arguments
+- `tone`: objective | persuasive | critical | humorous | emotional | mixed
+- `is_generated`: From transcript metadata
+- `language_code`: From transcript metadata
+
+### Labeled Comments CSV (`labeled_comments_*.csv`)
+**All original comment columns, plus:**
+- `summary_text`: Video summary (joined from summaries CSV)
+- `stance_congestion_pricing`: Video's stance (joined from summaries CSV)
+- `stance_confidence`: Video's stance confidence (joined from summaries CSV)
+- `sentiment`: very_negative | negative | neutral | positive | very_positive
+- `stance_congestion_pricing_comment`: Comment's stance (strongly_oppose | skeptical | neutral_or_unclear | supportive | strongly_supportive)
+- `stance_confidence_comment`: Comment's stance confidence (float 0-1)
+- `tone`: sarcastic | angry | frustrated | supportive | informative | humorous | neutral | mixed
+
 ## API Quota Management
 
+### YouTube Data API v3
 - Free tier: 10,000 units/day
 - Search: 100 units per query
 - Comments: 1 unit per page (100 comments)
 - Video details: 1 unit per batch (up to 50 IDs)
 - Roughly ~100 videos + comments/day within quota
+
+### OpenAI API (gpt-4o-mini)
+- Video summarization: ~50 videos can be processed
+- Comment labeling: ~8,676 comments requires significant API credits
+- Rate limiting: 50 requests/minute built into scripts
+- Checkpointing: prevents re-processing on failures
+- Recommendation: Test with `-n 10` or `-n 100` flag first
 
 ## Code Conventions
 
@@ -84,4 +166,10 @@ Note: Two separate date columns distinguish when video was uploaded vs when comm
 - No emojis
 - Straight quotes only (never curly)
 - Keep descriptions concise
-- Never commit `.env` or CSV files (gitignored)
+- Never commit `.env`, CSV files, or Jupyter notebooks (gitignored)
+
+## Prompts
+
+LLM prompts are stored in `prompts/` directory:
+- `prompts/summarize_video.md`: Video summarization system prompt
+- `prompts/label_sentiment.md`: Comment sentiment labeling system prompt
