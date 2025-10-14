@@ -2,6 +2,7 @@
 """
 Fetch transcripts for all videos from the YouTube comments CSV.
 Uses youtube-transcript-api to retrieve transcripts without OAuth.
+Includes resume capability via checkpointing.
 """
 
 import os
@@ -10,6 +11,7 @@ import re
 from datetime import datetime
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube import load_comments
+import pandas as pd
 
 
 def clean_text(text):
@@ -35,6 +37,48 @@ def clean_text(text):
 	text = text.strip()
 
 	return text
+
+
+def load_checkpoint(output_file):
+	"""
+	Load existing results to support resume capability.
+
+	Args:
+		output_file: Path to output CSV file
+
+	Returns:
+		Set of already-processed video IDs
+	"""
+	if not os.path.exists(output_file):
+		return set()
+
+	try:
+		df = pd.read_csv(output_file)
+		if "video_id" in df.columns:
+			return set(df["video_id"].tolist())
+		return set()
+	except Exception as e:
+		print(f"Warning: Could not load checkpoint: {e}")
+		return set()
+
+
+def save_checkpoint(output_file, results, fieldnames):
+	"""
+	Save current results to CSV (checkpoint).
+
+	Args:
+		output_file: Path to output CSV file
+		results: List of result dictionaries
+		fieldnames: CSV column names
+	"""
+	try:
+		with open(output_file, "w", newline="", encoding="utf-8") as f:
+			writer = csv.DictWriter(f, fieldnames=fieldnames)
+			writer.writeheader()
+			writer.writerows(results)
+		print(f"  Checkpoint saved ({len(results)} transcripts fetched)")
+	except Exception as e:
+		print(f"  Warning: Could not save checkpoint: {e}")
 
 
 def fetch_transcripts(csv_file=None, output_file=None, max_videos=None):
@@ -72,11 +116,31 @@ def fetch_transcripts(csv_file=None, output_file=None, max_videos=None):
 		timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 		output_file = f"data/transcripts_{timestamp}.csv"
 
+	# Load checkpoint to support resume
+	processed_video_ids = load_checkpoint(output_file)
+	if processed_video_ids:
+		print(f"Found existing results: {len(processed_video_ids)} videos already processed")
+
+	# Prepare fieldnames for output
+	fieldnames = [
+		"video_id",
+		"is_generated",
+		"language",
+		"language_code",
+		"transcript",
+	]
+
 	# Fetch transcripts for each video
 	all_transcript_entries = []
 	ytt_api = YouTubeTranscriptApi()
+	skipped = 0
 
 	for i, video_id in enumerate(video_ids, 1):
+		# Skip if already processed
+		if video_id in processed_video_ids:
+			skipped += 1
+			continue
+
 		print(f"[{i}/{len(video_ids)}] Fetching transcript for video: {video_id}")
 
 		try:
@@ -90,38 +154,32 @@ def fetch_transcripts(csv_file=None, output_file=None, max_videos=None):
 			# Combine all segments into one full transcript with cleaning
 			full_text = " ".join(clean_text(segment.text) for segment in transcript)
 
-			all_transcript_entries.append({
+			result = {
 				"video_id": video_id,
 				"is_generated": is_generated,
 				"language": language,
 				"language_code": language_code,
 				"transcript": full_text,
-			})
+			}
+			all_transcript_entries.append(result)
 
 			print(f"  → Collected transcript with {len(transcript)} segments")
+
+			# Save checkpoint immediately after each successful fetch
+			save_checkpoint(output_file, all_transcript_entries, fieldnames)
 
 		except Exception as e:
 			print(f"  → Error fetching transcript: {e}")
 			continue
 
-	# Save to CSV
+	# Final summary
 	if all_transcript_entries:
-		with open(output_file, "w", newline="", encoding="utf-8") as f:
-			fieldnames = [
-				"video_id",
-				"is_generated",
-				"language",
-				"language_code",
-				"transcript",
-			]
-			writer = csv.DictWriter(f, fieldnames=fieldnames)
-			writer.writeheader()
-			writer.writerows(all_transcript_entries)
-
 		print(f"\n Successfully fetched transcripts from {len(all_transcript_entries)} videos")
+		if skipped > 0:
+			print(f" Skipped {skipped} already-processed videos")
 		print(f" Saved to: {output_file}")
 	else:
-		print("No transcripts collected.")
+		print("No new transcripts collected.")
 
 
 if __name__ == "__main__":

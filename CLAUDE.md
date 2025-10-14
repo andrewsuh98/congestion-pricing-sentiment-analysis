@@ -49,7 +49,8 @@ df = load_comments('path/to/file.csv')      # Load specific file
 ```bash
 python fetch_transcripts.py                 # Fetch all video transcripts
 python fetch_transcripts.py -n 5            # Fetch first 5 videos only
-python fetch_transcripts.py -i data/transcripts_20251008_1430.csv
+python fetch_transcripts.py -i data/youtube_comments_20250930_1445.csv
+python fetch_transcripts.py -o output.csv   # Resume capability (reuse same filename)
 ```
 
 **Video summarization (requires OpenAI API):**
@@ -85,6 +86,7 @@ python label_comments.py -o output.csv      # Resume capability (reuse same file
 - Uses `youtube-transcript-api` (no OAuth required)
 - Fetches transcripts for all videos in comments CSV
 - Cleans escaped characters (`\xa0`, `\n`) and normalizes whitespace
+- Checkpointing: saves after each successful fetch, resume with same filename
 - Outputs: `data/transcripts_YYYYMMDD_HHMM.csv`
 - Fields: `video_id`, `is_generated`, `language`, `language_code`, `transcript`
 
