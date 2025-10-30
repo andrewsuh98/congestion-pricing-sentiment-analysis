@@ -4,19 +4,23 @@ Research pipeline for analyzing YouTube discourse on NYC congestion pricing thro
 
 ## Overview
 
-This project implements a four-stage pipeline to collect, transcribe, summarize, and analyze sentiment in YouTube videos and comments about NYC congestion pricing:
+This project implements a six-stage pipeline to collect, transcribe, summarize, and analyze YouTube discourse on NYC congestion pricing:
 
 1. **Data Collection** - Scrape videos and comments via YouTube Data API
 2. **Transcript Extraction** - Download video transcripts
 3. **Video Summarization** - Generate structured summaries with stance classification
 4. **Comment Labeling** - Classify comments by sentiment and stance
+5. **User Profile Collection** - Fetch commenter channel data from YouTube API
+6. **Demographic Analysis** - Infer user demographics using OpenAI vision API
 
 ## Features
 
-- Automated YouTube video and comment scraping
+- Automated YouTube video and comment scraping with author metadata
 - Transcript extraction without OAuth requirements
 - AI-powered video summarization with structured outputs (OpenAI)
 - Sentiment and stance analysis for comments
+- User profile collection (channel data, profile images, descriptions)
+- Demographic inference from profile images and usernames (OpenAI Vision)
 - Structured data outputs with confidence scores
 - Rate limiting and checkpointing for reliability
 - Resume capability for long-running processes
@@ -98,12 +102,50 @@ python label_comments.py -o data/my_labels.csv
 
 **Output:** `data/labeled_comments_YYYYMMDD_HHMM.csv`
 
+### 5. Fetch User Profiles
+
+```bash
+# Fetch profile data for all unique users
+python fetch_user_profiles.py
+
+# Test with 10 users first
+python fetch_user_profiles.py -n 10
+
+# Use specific comments file
+python fetch_user_profiles.py -i data/youtube_comments_20251029_1549.csv
+```
+
+**Output:** `data/user_profiles_YYYYMMDD_HHMM.csv`
+
+### 6. Analyze User Demographics
+
+```bash
+# Analyze demographics for all users (requires user_profiles CSV from step 5)
+python fetch_user_profiles.py -a
+
+# Test with 10 users first (RECOMMENDED - uses OpenAI Vision API)
+python fetch_user_profiles.py -a -n 10
+
+# Use specific profiles file
+python fetch_user_profiles.py -a -p data/user_profiles_20251029_1549.csv
+```
+
+**Output:** `data/user_demographics_YYYYMMDD_HHMM.csv`
+
 ## Data Pipeline
 
 ```
 YouTube Videos
      ↓
 [youtube.py] → youtube_comments_YYYYMMDD_HHMM.csv
+     ↓                           ↓
+     ↓                    [fetch_user_profiles.py]
+     ↓                           ↓
+     ↓                    user_profiles_YYYYMMDD_HHMM.csv
+     ↓                           ↓
+     ↓                    [fetch_user_profiles.py -a]
+     ↓                           ↓
+     ↓                    user_demographics_YYYYMMDD_HHMM.csv
      ↓
 [fetch_transcripts.py] → transcripts_YYYYMMDD_HHMM.csv
      ↓
@@ -117,6 +159,21 @@ YouTube Videos
 ### Comments CSV
 - Video metadata: `video_id`, `video_title`, `video_channel`, `video_published_at`, `video_view_count`, etc.
 - Comment data: `author`, `comment_text`, `comment_like_count`, `comment_published_at`
+- Author metadata: `author_channel_id`, `author_channel_url`, `author_profile_image_url`
+
+### User Profiles CSV
+- `channel_id`, `channel_title`, `channel_description`
+- `channel_country`, `channel_custom_url`, `thumbnail_url`
+- `subscriber_count`, `view_count`, `video_count`
+
+### User Demographics CSV
+- `channel_id`, `channel_title`, `thumbnail_url`
+- `channel_description`, `channel_country`
+- `inferred_age_range`: under_18 | 18-24 | 25-34 | 35-44 | 45-54 | 55-64 | 65_plus | unclear
+- `inferred_gender`: male | female | non_binary | unclear
+- `inferred_race_ethnicity`: white | black_african_american | hispanic_latino | asian | middle_eastern_north_african | native_american_indigenous | pacific_islander | multiracial | unclear
+- `confidence_level`: 0-1 float
+- `reasoning`: Brief explanation of inference
 
 ### Transcripts CSV
 - `video_id`, `is_generated`, `language`, `language_code`, `transcript`
@@ -141,13 +198,15 @@ YouTube Videos
 - Search: 100 units per query
 - Comments: 1 unit per 100 comments
 - Video details: 1 unit per batch (up to 50 IDs)
+- Channels: 1 unit per batch (up to 50 IDs)
 - Approximately 100 videos + comments per day
 
-**OpenAI API (gpt-4o-mini)**
-- Video summarization: ~50 videos
-- Comment labeling: 8,676+ comments requires significant API credits
+**OpenAI API**
+- Video summarization (gpt-4o-mini): ~50 videos
+- Comment labeling (gpt-4o-mini): 8,676+ comments requires significant API credits
+- Demographic analysis (gpt-4o with vision): ~7,500 users with profile image analysis
 - Built-in rate limiting: 50 requests/minute
-- Recommendation: Test with `-n 10` or `-n 100` first
+- **Recommendation**: Test with `-n 10` first, especially for demographic analysis (most expensive)
 
 ## Key Features
 
@@ -171,9 +230,11 @@ Gracefully handles missing data, disabled comments, and API errors.
 ├── fetch_transcripts.py          # Transcript extraction
 ├── summarize_videos.py           # Video summarization (OpenAI)
 ├── label_comments.py             # Comment sentiment labeling (OpenAI)
+├── fetch_user_profiles.py        # User profile collection and demographic analysis
 ├── prompts/
 │   ├── summarize_video.md        # Video summarization prompt
-│   └── label_sentiment.md        # Comment labeling prompt
+│   ├── label_sentiment.md        # Comment labeling prompt
+│   └── infer_demographics.md     # Demographic inference prompt
 ├── data/                          # Output CSVs (gitignored)
 ├── requirements.txt
 ├── .env                           # API keys (gitignored)

@@ -10,6 +10,8 @@ Research pipeline for analyzing YouTube discourse on NYC congestion pricing:
 2. **Transcript Extraction**: Download video transcripts using youtube-transcript-api
 3. **Video Summarization**: Generate structured summaries using OpenAI with stance classification
 4. **Comment Labeling**: Classify comments by sentiment and stance using OpenAI structured outputs
+5. **User Profile Collection**: Fetch commenter channel data (profile images, descriptions, metadata)
+6. **Demographic Analysis**: Infer user demographics using OpenAI Vision API from profile images and usernames
 
 ## Setup
 
@@ -67,9 +69,20 @@ python label_comments.py                    # Label all comments
 python label_comments.py -o output.csv      # Resume capability (reuse same filename)
 ```
 
+**User profile collection and demographic analysis:**
+```bash
+# Phase 1: Fetch user profiles from YouTube API
+python fetch_user_profiles.py               # Fetch all unique users
+python fetch_user_profiles.py -n 10         # Test with 10 users
+
+# Phase 2: Analyze demographics with OpenAI Vision API
+python fetch_user_profiles.py -a            # Analyze all profiles
+python fetch_user_profiles.py -a -n 10      # Test with 10 profiles (RECOMMENDED)
+```
+
 ## Architecture
 
-**Four-stage pipeline:**
+**Six-stage pipeline:**
 
 ### 1. Data Collection (`youtube.py`)
 - **Search phase:** `search_videos()` → `get_video_details()`
@@ -78,6 +91,7 @@ python label_comments.py -o output.csv      # Resume capability (reuse same file
   - Duration converted from ISO 8601 to seconds via `parse_duration()`
 - **Collection phase:** `get_video_comments()` per video
   - Fetches all top-level comments with pagination (100/request)
+  - **NEW**: Captures author metadata: `author_channel_id`, `author_channel_url`, `author_profile_image_url`
   - Handles disabled comments gracefully
   - Does NOT fetch replies (would require separate API calls)
 - **Export:** Saves to `data/youtube_comments_YYYYMMDD_HHMM.csv`
@@ -106,6 +120,25 @@ python label_comments.py -o output.csv      # Resume capability (reuse same file
 - Outputs: `data/labeled_comments_YYYYMMDD_HHMM.csv`
 - New fields: `sentiment`, `stance_congestion_pricing_comment`, `stance_confidence_comment`, `tone`
 
+### 5. User Profile Collection (`fetch_user_profiles.py`)
+- Extracts unique users from comments CSV (`author` + `author_channel_id`)
+- Batches channel IDs (50 per request) for YouTube API efficiency
+- Calls `channels().list()` with parts: `snippet`, `statistics`
+- Fetches: profile images (800x800px), channel descriptions, country, subscriber/view counts
+- Checkpointing: saves after each batch, resume with same filename
+- Outputs: `data/user_profiles_YYYYMMDD_HHMM.csv`
+- Fields: `channel_id`, `channel_title`, `channel_description`, `channel_country`, `thumbnail_url`, `subscriber_count`, `view_count`, `video_count`
+
+### 6. Demographic Analysis (`fetch_user_profiles.py -a`)
+- Uses OpenAI gpt-4o (vision-capable model)
+- Pydantic model: `UserDemographics` with 5 structured fields
+- Analyzes profile image + username + description + country
+- Infers demographics from textual cues even without human faces (gendered names, birth years, cultural names)
+- Rate limiting: 50 requests/minute (~1.2s delay)
+- Checkpointing: saves every 50 users, resume with same filename
+- Outputs: `data/user_demographics_YYYYMMDD_HHMM.csv`
+- Fields: `inferred_age_range`, `inferred_gender`, `inferred_race_ethnicity`, `confidence_level`, `reasoning`
+
 ## CSV Schemas
 
 ### Comments CSV (`youtube_comments_*.csv`)
@@ -116,6 +149,9 @@ python label_comments.py -o output.csv      # Resume capability (reuse same file
 
 **Comment data:**
 - `author`, `comment_text`, `comment_like_count`, `comment_published_at`
+
+**Author metadata:**
+- `author_channel_id`, `author_channel_url`, `author_profile_image_url`
 
 Note: Two separate date columns distinguish when video was uploaded vs when comment was posted.
 
@@ -146,6 +182,29 @@ Note: Two separate date columns distinguish when video was uploaded vs when comm
 - `stance_confidence_comment`: Comment's stance confidence (float 0-1)
 - `tone`: sarcastic | angry | frustrated | supportive | informative | humorous | neutral | mixed
 
+### User Profiles CSV (`user_profiles_*.csv`)
+- `channel_id`: YouTube channel ID
+- `channel_title`: Channel/username
+- `channel_description`: Channel "About" section
+- `channel_country`: Country code (if set by user)
+- `channel_custom_url`: Custom channel URL
+- `thumbnail_url`: Profile image URL (800x800px)
+- `subscriber_count`: Number of subscribers
+- `view_count`: Total channel views
+- `video_count`: Number of videos uploaded
+
+### User Demographics CSV (`user_demographics_*.csv`)
+- `channel_id`: YouTube channel ID
+- `channel_title`: Channel/username
+- `thumbnail_url`: Profile image URL
+- `channel_description`: Channel "About" section
+- `channel_country`: Country code
+- `inferred_age_range`: under_18 | 18-24 | 25-34 | 35-44 | 45-54 | 55-64 | 65_plus | unclear
+- `inferred_gender`: male | female | non_binary | unclear
+- `inferred_race_ethnicity`: white | black_african_american | hispanic_latino | asian | middle_eastern_north_african | native_american_indigenous | pacific_islander | multiracial | unclear
+- `confidence_level`: Float 0-1 indicating inference confidence
+- `reasoning`: Brief explanation of demographic inference (2-3 sentences)
+
 ## API Quota Management
 
 ### YouTube Data API v3
@@ -153,14 +212,16 @@ Note: Two separate date columns distinguish when video was uploaded vs when comm
 - Search: 100 units per query
 - Comments: 1 unit per page (100 comments)
 - Video details: 1 unit per batch (up to 50 IDs)
+- Channels: 1 unit per batch (up to 50 IDs)
 - Roughly ~100 videos + comments/day within quota
 
-### OpenAI API (gpt-4o-mini)
-- Video summarization: ~50 videos can be processed
-- Comment labeling: ~8,676 comments requires significant API credits
+### OpenAI API
+- Video summarization (gpt-4o-mini): ~50 videos can be processed
+- Comment labeling (gpt-4o-mini): ~8,676 comments requires significant API credits
+- Demographic analysis (gpt-4o with vision): ~7,500 users with profile images (most expensive)
 - Rate limiting: 50 requests/minute built into scripts
 - Checkpointing: prevents re-processing on failures
-- Recommendation: Test with `-n 10` or `-n 100` flag first
+- Recommendation: Test with `-n 10` flag first, especially for demographic analysis
 
 ## Code Conventions
 
@@ -175,3 +236,4 @@ Note: Two separate date columns distinguish when video was uploaded vs when comm
 LLM prompts are stored in `prompts/` directory:
 - `prompts/summarize_video.md`: Video summarization system prompt
 - `prompts/label_sentiment.md`: Comment sentiment labeling system prompt
+- `prompts/infer_demographics.md`: Demographic inference system prompt (emphasizes inference from usernames, birth years, and cultural names)
