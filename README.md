@@ -121,13 +121,13 @@ python fetch_user_profiles.py -i data/youtube_comments_20251029_1549.csv
 
 ```bash
 # Analyze demographics for all users (requires user_profiles CSV from step 5)
-python fetch_user_profiles.py -a
+python infer_demographics.py
 
 # Test with 10 users first (RECOMMENDED - uses OpenAI Vision API)
-python fetch_user_profiles.py -a -n 10
+python infer_demographics.py -n 10
 
 # Use specific profiles file
-python fetch_user_profiles.py -a -p data/user_profiles_20251029_1549.csv
+python infer_demographics.py -i data/user_profiles_20251029_1549.csv
 ```
 
 **Output:** `data/user_demographics_YYYYMMDD_HHMM.csv`
@@ -143,7 +143,7 @@ YouTube Videos
      ↓                           ↓
      ↓                    user_profiles_YYYYMMDD_HHMM.csv
      ↓                           ↓
-     ↓                    [fetch_user_profiles.py -a]
+     ↓                    [infer_demographics.py]
      ↓                           ↓
      ↓                    user_demographics_YYYYMMDD_HHMM.csv
      ↓
@@ -230,7 +230,8 @@ Gracefully handles missing data, disabled comments, and API errors.
 ├── fetch_transcripts.py          # Transcript extraction
 ├── summarize_videos.py           # Video summarization (OpenAI)
 ├── label_comments.py             # Comment sentiment labeling (OpenAI)
-├── fetch_user_profiles.py        # User profile collection and demographic analysis
+├── fetch_user_profiles.py        # User profile collection (YouTube API)
+├── infer_demographics.py         # Demographic analysis (OpenAI Vision)
 ├── prompts/
 │   ├── summarize_video.md        # Video summarization prompt
 │   ├── label_sentiment.md        # Comment labeling prompt

@@ -69,20 +69,22 @@ python label_comments.py                    # Label all comments
 python label_comments.py -o output.csv      # Resume capability (reuse same filename)
 ```
 
-**User profile collection and demographic analysis:**
+**User profile collection:**
 ```bash
-# Phase 1: Fetch user profiles from YouTube API
 python fetch_user_profiles.py               # Fetch all unique users
 python fetch_user_profiles.py -n 10         # Test with 10 users
+```
 
-# Phase 2: Analyze demographics with OpenAI Vision API
-python fetch_user_profiles.py -a            # Analyze all profiles
-python fetch_user_profiles.py -a -n 10      # Test with 10 profiles (RECOMMENDED)
+**Demographic inference (requires OpenAI Vision API):**
+```bash
+python infer_demographics.py                # Analyze all profiles
+python infer_demographics.py -n 10          # Test with 10 profiles (RECOMMENDED)
+python infer_demographics.py -i data/user_profiles_20251029_1549.csv
 ```
 
 ## Architecture
 
-**Six-stage pipeline:**
+**Six-stage pipeline (stages 5 and 6 now use separate scripts):**
 
 ### 1. Data Collection (`youtube.py`)
 - **Search phase:** `search_videos()` → `get_video_details()`
@@ -129,7 +131,7 @@ python fetch_user_profiles.py -a -n 10      # Test with 10 profiles (RECOMMENDED
 - Outputs: `data/user_profiles_YYYYMMDD_HHMM.csv`
 - Fields: `channel_id`, `channel_title`, `channel_description`, `channel_country`, `thumbnail_url`, `subscriber_count`, `view_count`, `video_count`
 
-### 6. Demographic Analysis (`fetch_user_profiles.py -a`)
+### 6. Demographic Analysis (`infer_demographics.py`)
 - Uses OpenAI gpt-4o (vision-capable model)
 - Pydantic model: `UserDemographics` with 5 structured fields
 - Analyzes profile image + username + description + country
@@ -138,6 +140,7 @@ python fetch_user_profiles.py -a -n 10      # Test with 10 profiles (RECOMMENDED
 - Checkpointing: saves every 50 users, resume with same filename
 - Outputs: `data/user_demographics_YYYYMMDD_HHMM.csv`
 - Fields: `inferred_age_range`, `inferred_gender`, `inferred_race_ethnicity`, `confidence_level`, `reasoning`
+- **Note**: Separated from profile collection for better modularity and cost management
 
 ## CSV Schemas
 
